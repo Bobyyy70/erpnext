@@ -1,40 +1,42 @@
 version: "3.7"
 
 services:
-  erpnext:
-    image: frappe/erpnext:develop
-    container_name: erpnext
-    environment:
-      - DB_HOST=mariadb
-      - DB_PORT=3306
-      - DB_NAME=default
-      - DB_USER=mariadb
-      - DB_PASSWORD=Sy9r1WtMu6aJvTR8ldE79
-      - REDIS_CACHE=redis://default:pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy@redis:6379
-      - REDIS_QUEUE=redis://default:pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy@redis:6379
-      - REDIS_SOCKETIO=redis://default:pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy@redis:6379
-      - SITE_NAME=speedelog.space
-      - ADMIN_PASSWORD=admin123
-    volumes:
-      - ./erpnext-sites:/home/frappe/frappe-bench/sites
-    depends_on:
-      - mariadb
-      - redis
-
   mariadb:
     image: mariadb:11
-    container_name: mariadb
+    restart: unless-stopped
     environment:
-      - MYSQL_ROOT_PASSWORD=lihQtJ69G8a95lBty8ScWU
-      - MYSQL_DATABASE=default
-      - MYSQL_USER=mariadb
-      - MYSQL_PASSWORD=Sy9r1WtMu6aJvTR8ldE79
+      MYSQL_ROOT_PASSWORD: lihQtJ69G8a95lBty8ScWU
     volumes:
       - ./mariadb-data:/var/lib/mysql
 
   redis:
     image: redis:7.2
-    container_name: redis
     command: redis-server --requirepass pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy
     volumes:
       - ./redis-data:/data
+
+  erpnext:
+    image: frappe/erpnext:develop
+    depends_on:
+      - mariadb
+      - redis
+    environment:
+      SITE_NAME: erp.speedelog.space
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_ROOT_USER: root
+      MYSQL_ROOT_PASSWORD: lihQtJ69G8a95lBty8ScWU
+      ADMIN_PASSWORD: admin123
+      INSTALL_APPS: erpnext
+      REDIS_CACHE: redis://default:pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy@redis:6379
+      REDIS_QUEUE: redis://default:pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy@redis:6379
+      REDIS_SOCKETIO: redis://default:pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy@redis:6379
+    volumes:
+      - ./erpnext-sites:/home/frappe/frappe-bench/sites
+    ports:
+      - "8000:8000"
+
+volumes:
+  mariadb-data:
+  redis-data:
+  erpnext-sites:
