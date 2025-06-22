@@ -3,23 +3,24 @@ version: "3.7"
 services:
   mariadb:
     image: mariadb:11
+    container_name: mariadb
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: lihQtJ69G8a95lBty8ScWU
     volumes:
-      - ./mariadb-data:/var/lib/mysql
+      - mariadb-data:/var/lib/mysql
 
   redis:
     image: redis:7.2
+    container_name: redis
     command: redis-server --requirepass pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy
     volumes:
-      - ./redis-data:/data
+      - redis-data:/data
 
   erpnext:
     image: frappe/erpnext:develop
-    depends_on:
-      - mariadb
-      - redis
+    container_name: erpnext
+    restart: unless-stopped
     environment:
       SITE_NAME: erp.speedelog.space
       DB_HOST: mariadb
@@ -31,10 +32,17 @@ services:
       REDIS_CACHE: redis://default:pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy@redis:6379
       REDIS_QUEUE: redis://default:pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy@redis:6379
       REDIS_SOCKETIO: redis://default:pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy@redis:6379
+    depends_on:
+      - mariadb
+      - redis
     volumes:
-      - ./erpnext-sites:/home/frappe/frappe-bench/sites
-    ports:
-      - "8000:8000"
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.erp.rule=Host(`erp.speedelog.space`)
+      - traefik.http.routers.erp.entrypoints=websecure
+      - traefik.http.routers.erp.tls.certresolver=letsencrypt
+      - traefik.http.services.erp.loadbalancer.server.port=8000
 
 volumes:
   mariadb-data:
