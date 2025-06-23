@@ -1,50 +1,251 @@
-version: "3.7"
+# docker-compose.yml for Coolify deployment
+version: '3.8'
 
-services:
-  mariadb:
-    image: mariadb:11
-    container_name: mariadb
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: lihQtJ69G8a95lBty8ScWU
-    volumes:
-      - mariadb-data:/var/lib/mysql
+x-customizable-image: &customizable_image
+  image: frappe/erpnext:${ERPNEXT_VERSION:-v15.39.1}
+  pull_policy: always
 
-  redis:
-    image: redis:7.2
-    container_name: redis
-    command: redis-server --requirepass pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy
-    volumes:
-      - redis-data:/data
+x-depends-on-configurator: &depends_on_configurator
+  depends_on:
+    configurator:
+      condition: service_completed_successfully
 
-  erpnext:
-    image: frappe/erpnext:develop
-    container_name: erpnext
-    restart: unless-stopped
-    environment:
-      SITE_NAME: erp.speedelog.space
-      DB_HOST: mariadb
-      DB_PORT: 3306
-      DB_ROOT_USER: root
-      MYSQL_ROOT_PASSWORD: lihQtJ69G8a95lBty8ScWU
-      ADMIN_PASSWORD: admin123
-      INSTALL_APPS: erpnext
-      REDIS_CACHE: redis://default:pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy@redis:6379
-      REDIS_QUEUE: redis://default:pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy@redis:6379
-      REDIS_SOCKETIO: redis://default:pWhfJOxlOlMEb5TmY6OxKojC7MhKbqeQa9U2NYoHaoyQyEq8ByfDt2ODmIyS0HVy@redis:6379
-    depends_on:
-      - mariadb
-      - redis
-    volumes:
-      - erpnext-sites:/home/frappe/frappe-bench/sites
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.erp.rule=Host(`erp.speedelog.space`)
-      - traefik.http.routers.erp.entrypoints=websecure
-      - traefik.http.routers.erp.tls.certresolver=letsencrypt
-      - traefik.http.services.erp.loadbalancer.server.port=8000
+networks:
+  erpnext-network:
+    driver: bridge
 
 volumes:
+  sites:
   mariadb-data:
-  redis-data:
-  erpnext-sites:
+  redis-cache-data:
+  redis-queue-data:
+  redis-socketio-data:
+
+services:
+  # Configuration service - runs once to set up ERPNext
+  configurator:
+    <<: *customizable_image
+    platform: linux/amd64
+    command: configure.py
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+      REDIS_SOCKETIO: redis-socketio:6379
+      SOCKETIO_PORT: 9000
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+    networks:
+      - erpnext-network
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-queue:
+        condition: service_healthy
+      redis-socketio:
+        condition: service_healthy
+    restart: "no"
+
+  # Database service
+  mariadb:
+    image: mariadb:10.6
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+      - --skip-innodb-read-only-compressed
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-StrongDBPassword123}
+      MYSQL_DATABASE: ${DB_NAME:-erpnext}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    networks:
+      - erpnext-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "--password=${DB_PASSWORD:-StrongDBPassword123}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # Redis services
+  redis-cache:
+    image: redis:6.2-alpine
+    volumes:
+      - redis-cache-data:/data
+    networks:
+      - erpnext-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  redis-queue:
+    image: redis:6.2-alpine
+    volumes:
+      - redis-queue-data:/data
+    networks:
+      - erpnext-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  redis-socketio:
+    image: redis:6.2-alpine
+    volumes:
+      - redis-socketio-data:/data
+    networks:
+      - erpnext-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ERPNext backend service
+  backend:
+    <<: [*depends_on_configurator, *customizable_image]
+    platform: linux/amd64
+    command: ["gunicorn", "--bind=0.0.0.0:8000", "--workers=4", "--timeout=120", "frappe.app:application"]
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+      REDIS_SOCKETIO: redis-socketio:6379
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+    networks:
+      - erpnext-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/method/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  # Queue workers
+  queue-short:
+    <<: [*depends_on_configurator, *customizable_image]
+    platform: linux/amd64
+    command: bench worker --queue short,default
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+      REDIS_SOCKETIO: redis-socketio:6379
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+    networks:
+      - erpnext-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  queue-long:
+    <<: [*depends_on_configurator, *customizable_image]
+    platform: linux/amd64
+    command: bench worker --queue long,default,short
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+      REDIS_SOCKETIO: redis-socketio:6379
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+    networks:
+      - erpnext-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # Scheduler service
+  scheduler:
+    <<: [*depends_on_configurator, *customizable_image]
+    platform: linux/amd64
+    command: bench schedule
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+      REDIS_SOCKETIO: redis-socketio:6379
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+    networks:
+      - erpnext-network
+
+  # WebSocket service
+  websocket:
+    <<: [*depends_on_configurator, *customizable_image]
+    platform: linux/amd64
+    command:
+      - node
+      - /home/frappe/frappe-bench/apps/frappe/socketio.js
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+      REDIS_SOCKETIO: redis-socketio:6379
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+    networks:
+      - erpnext-network
+
+  # Frontend service
+  frontend:
+    <<: [*depends_on_configurator, *customizable_image]
+    platform: linux/amd64
+    command: ["nginx-entrypoint.sh"]
+    environment:
+      BACKEND: backend:8000
+      SOCKETIO: websocket:9000
+      UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+    networks:
+      - erpnext-network
+    ports:
+      - "80:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+      websocket:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
